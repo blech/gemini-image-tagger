@@ -11,41 +11,51 @@ import sqlite3
 from PIL import Image
 import pydantic
 
+
 def init_model() -> genai.GenerativeModel:
   genai.configure(api_key=os.environ["API_KEY"])
   return genai.GenerativeModel('gemini-1.5-flash')
+
 
 def init_db() -> sqlite3.Connection:
   db_path = '/Users/blech/Documents/webservices/ffffound-mirror/db/ffffound-blech.db'
   conn = sqlite3.connect(db_path)
   return conn
 
+
 def get_display_name_from_filename(path: str) -> str:
   return path.split('/')[-1]
+
 
 def get_id_from_filepath(path: str) -> str:
   display_name = get_display_name_from_filename(path)
   return display_name.split('.')[0]
 
-def fetch_tags_for_image(path: str, model: genai.GenerativeModel) -> list:
+
+def check_image(path: str) -> bool:
   try:
     image = Image.open(path)
-  except IOError:
+  except IOError as e:
+    print (f"IOError {e} for {path}")
     return False
+  return True
 
+
+def fetch_tags_for_image(path: str, model: genai.GenerativeModel) -> list:
   display_name = get_display_name_from_filename(path)
   sample_file = genai.upload_file(path=path, display_name=display_name)
   prompt = 'Generate ten single or two word tags for this image. Output them as comma separated, without any additional text.'
   
   response = model.generate_content([sample_file, prompt])
-  response_text = response.text.strip().strip('.')
   try:
-    tags = response_text.split(', ')
+    response_text = response.text.strip().strip('.')
   except ValueError as e:
     print (f"Got exception {e} fetching response text")
-    print (response.result)
+    print (response)
     return False
+  tags = response_text.split(', ')
   return tags
+
 
 def check_tags_in_db(path: str, conn: sqlite3.Connection) -> bool:
   ffffound_id = get_id_from_filepath(path)
@@ -57,6 +67,7 @@ def check_tags_in_db(path: str, conn: sqlite3.Connection) -> bool:
   res = cur.execute(sql, (ffffound_id,)) # Python gotcha: force tuple
   tag_count = res.fetchone()[0]
   return tag_count >= 10
+
 
 def write_tags_to_db(path: str, tags: list, conn: sqlite3.Connection):
   ffffound_id = get_id_from_filepath(path)
@@ -73,6 +84,7 @@ def write_tags_to_db(path: str, tags: list, conn: sqlite3.Connection):
       print (f"Tag {tag} already exists for post {ffffound_id}; skipping")
   conn.commit()
 
+
 if __name__ == "__main__":
   model = init_model()
   conn = init_db()
@@ -83,10 +95,16 @@ if __name__ == "__main__":
       print (f"Tags exist for {filename}")
       continue
 
+    is_image = check_image(filename)
+    if not is_image:
+      print (f"Pillow could not open {filename}")
+      continue
+
     tags = fetch_tags_for_image(filename, model)
     if not tags:
-      print (F"No tags found (not an image?) for '{filename}'")
-    if tags:
-      write_tags_to_db(filename, tags, conn)
-      print (f"Written {len(tags)} tags for {filename}")
+      print (F"No tags found for '{filename}'")
+      continue
+
+    write_tags_to_db(filename, tags, conn)
+    print (f"Written {len(tags)} tags for {filename}")
 
