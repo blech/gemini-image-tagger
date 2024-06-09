@@ -44,17 +44,30 @@ def check_image(path: str) -> bool:
 def fetch_tags_for_image(path: str, model: genai.GenerativeModel) -> list:
   display_name = get_display_name_from_filename(path)
   sample_file = genai.upload_file(path=path, display_name=display_name)
-  prompt = 'Generate ten single or two word tags for this image. Output them as comma separated, without any additional text.'
-  
+  prompt = 'Generate ten unique, one to three word long, tags for this image. Output them as comma separated, without any additional text.'
+
   response = model.generate_content([sample_file, prompt])
   try:
     response_text = response.text.strip().strip('.')
   except ValueError as e:
-    print (f"Got exception {e} fetching response text")
-    print (response)
+    if response.candidates:
+      parse_safety_reason(response.candidates)
+    else:
+      print (f"Got exception {e} fetching response text")
+      print (response)
     return False
   tags = response_text.split(', ')
   return tags
+
+
+def parse_safety_reason(candidates) -> None:
+  for candidate in candidates:
+    if candidate.finish_reason.name == 'SAFETY':
+      for rating in candidate.safety_ratings:
+        if rating.probability > 1:
+          print (f"{rating.category.name} has level {rating.probability.name}")
+    else:
+      print (f"Unhandled finish_reason {candidate.finish_reason.name}")
 
 
 def check_tags_in_db(path: str, conn: sqlite3.Connection) -> bool:
@@ -66,7 +79,7 @@ def check_tags_in_db(path: str, conn: sqlite3.Connection) -> bool:
   cur = conn.cursor()
   res = cur.execute(sql, (ffffound_id,)) # Python gotcha: force tuple
   tag_count = res.fetchone()[0]
-  return tag_count >= 10
+  return tag_count >= 8 # allows for missing tags because of duplicate suggestions
 
 
 def write_tags_to_db(path: str, tags: list, conn: sqlite3.Connection):
@@ -105,6 +118,8 @@ if __name__ == "__main__":
       print (F"No tags found for '{filename}'")
       continue
 
+    # ensure tags are unique
+    tags = list(set(tags))
     write_tags_to_db(filename, tags, conn)
     print (f"Written {len(tags)} tags for {filename}")
 
